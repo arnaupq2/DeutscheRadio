@@ -30,7 +30,8 @@ YTDL_OPTS = {
     'noplaylist': True,
     'quiet': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'
+    'source_address': '0.0.0.0',
+    'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 }
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -169,6 +170,8 @@ async def play_next(ctx_or_vc):
     except Exception as e:
         print(f"❌ Fehler: {e}")
         state.song_counter += 1
+        print("⏳ Warte 30s wegen Fehler (Anti-Spam)...")
+        await asyncio.sleep(30)
         await play_next(ctx_or_vc)
 
 # ---------------- COMMANDS (GERMAN) ----------------
