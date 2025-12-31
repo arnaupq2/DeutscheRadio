@@ -135,8 +135,8 @@ async def get_stream_from_cobalt(url):
     }
     payload = {
         "url": url,
-        "isAudioOnly": True,
-        "aFormat": "mp3" # Convert to safe format
+        "isAudioOnly": True
+        # "aFormat": "mp3" <--- Quitado para obtener stream directo/raw (más rápido/compatible)
     }
     
     async with aiohttp.ClientSession() as session:
@@ -147,6 +147,10 @@ async def get_stream_from_cobalt(url):
                     data = await resp.json()
                     if "url" in data:
                         return data["url"]
+                    elif "picker" in data: # Sometimes returns multiple picker options
+                        for item in data["picker"]:
+                            if item.get("type") == "audio":
+                                return item["url"]
         except Exception as e:
             print(f"Cobalt error: {e}")
     return None
