@@ -126,18 +126,43 @@ async def generate_tts(text, filename="tts_temp.mp3"):
     await communicate.save(filename)
     return filename
 
+# ---------------- PROXY FALLBACK ----------------
+# Lista de proxies gratuitos (HTTP/HTTPS) para intentar "tapar" la IP si todo falla
+PROXIES = [
+    "http://51.158.154.173:3128",
+    "http://20.210.113.32:8123",
+    "http://144.24.137.255:3128",
+    "http://45.74.19.212:15525"
+]
+
+async def get_stream_from_invidious(video_id):
+    instances = [
+        "https://inv.tux.pizza",
+        "https://invidious.jing.rocks",
+        "https://inv.nadeko.net",
+        "https://invidious.nerdvpn.de"
+    ]
+    async with aiohttp.ClientSession() as session:
+        for base_url in instances:
+            try:
+                print(f"🔄 Invidious API: {base_url}")
+                url = f"{base_url}/api/v1/videos/{video_id}"
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if "formatStreams" in data:
+                            # Prefer m4a/mp4 per compatibility
+                            formats = data["formatStreams"]
+                            best = sorted(formats, key=lambda x: x.get("bitrate", "0") or 0, reverse=True)[0]
+                            return best["url"]
+            except: continue
+    return None
+
 # ---------------- STREAM EXTRACTORS ----------------
 async def get_stream_from_cobalt(url):
     api_url = "https://api.cobalt.tools/api/json"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "url": url,
-        "isAudioOnly": True
-        # "aFormat": "mp3" <--- Quitado para obtener stream directo/raw (más rápido/compatible)
-    }
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    payload = {"url": url, "isAudioOnly": True}
     
     async with aiohttp.ClientSession() as session:
         try:
@@ -145,14 +170,11 @@ async def get_stream_from_cobalt(url):
             async with session.post(api_url, json=payload, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    if "url" in data:
-                        return data["url"]
-                    elif "picker" in data: # Sometimes returns multiple picker options
+                    if "url" in data: return data["url"]
+                    elif "picker" in data:
                         for item in data["picker"]:
-                            if item.get("type") == "audio":
-                                return item["url"]
-        except Exception as e:
-            print(f"Cobalt error: {e}")
+                            if item.get("type") == "audio": return item["url"]
+        except Exception as e: print(f"Cobalt error: {e}")
     return None
 
 async def get_stream_from_piped(video_id):
@@ -188,7 +210,6 @@ async def play_next(ctx_or_vc):
 
     if state.next_tts_message:
         text, state.next_tts_message = state.next_tts_message, None
-        print(f"📣 TTS: {text}")
         tts_file = await generate_tts(text)
         vc.play(discord.FFmpegPCMAudio(tts_file), after=lambda e: bot.loop.create_task(play_next(ctx_or_vc)))
         return
@@ -204,46 +225,70 @@ async def play_next(ctx_or_vc):
 
     song_url = state.get_next_song()
     if not song_url:
-        print("Warte auf Musik...")
-        await asyncio.sleep(10)
-        await play_next(ctx_or_vc)
-        return
+        await asyncio.sleep(10); await play_next(ctx_or_vc); return
 
     print(f"🔍 Procesando: {song_url}")
     stream_url = None
     title = "Radio Stream"
 
-    # STRATEGY 1: COBALT API (High Success, No IP Block)
-    if "youtube.com" in song_url or "youtu.be" in song_url:
+    # STRATEGY 1: COBALT
+    if not stream_url and ("youtube.com" in song_url or "youtu.be" in song_url):
         stream_url = await get_stream_from_cobalt(song_url)
         if stream_url: title = "Radio Play (Cobalt)"
 
-    # STRATEGY 2: PIPED API (Fallback)
-    if not stream_url and ("youtube.com" in song_url or "youtu.be" in song_url):
+    # STRATEGY 2: INVIDIOUS (Agregado)
+    if not stream_url:
+        vid = extract_video_id(song_url)
+        if vid:
+            stream_url = await get_stream_from_invidious(vid)
+            if stream_url: title = "Radio Play (Invidious)"
+
+    # STRATEGY 3: PIPED
+    if not stream_url:
         vid = extract_video_id(song_url)
         if vid:
             stream_url = await get_stream_from_piped(vid)
             if stream_url: title = "Radio Play (Piped)"
 
-    # STRATEGY 3: LOCAL YTDL (Fallback for Search/Other sites)
+    # STRATEGY 4: LOCAL YTDL + PROXY ROTATION
     if not stream_url:
+        print("⚠️ APIs fallaron. Usando YTDL con Proxies...")
+        loop = asyncio.get_event_loop()
+        
+        # Try without proxy first
         try:
-            loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(song_url, download=False))
             if 'entries' in data: data = data['entries'][0]
-            stream_url = data['url']
-            title = data.get('title', 'Unknown')
-        except Exception as e:
-            print(f"❌ YTDL también falló: {e}")
+            stream_url = data['url']; title = data.get('title', 'Unknown')
+        except:
+            # Try with proxies
+            for proxy in PROXIES:
+                print(f"trying proxy: {proxy}")
+                PROXY_OPTS = YTDL_OPTS.copy()
+                PROXY_OPTS['proxy'] = proxy
+                try:
+                    data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(PROXY_OPTS).extract_info(song_url, download=False))
+                    if 'entries' in data: data = data['entries'][0]
+                    stream_url = data['url']; title = data.get('title', 'Unknown')
+                    print("✅ Proxy funcionó!")
+                    break
+                except: continue
 
     if stream_url:
         print(f"▶️ Reproduciendo: {title}")
+        print(f"🔗 Link: {stream_url[:50]}...")
         state.song_counter += 1
-        source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
+        SAFE_FFMPEG = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+        source = discord.FFmpegPCMAudio(stream_url, **SAFE_FFMPEG)
         vc.play(source, after=lambda e: bot.loop.create_task(play_next(ctx_or_vc)))
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=title))
+        
+        await asyncio.sleep(2)
+        if not vc.is_playing():
+            print("⚠️ Silencio detectado. Saltando...")
+            vc.stop()
     else:
-        print("❌ Imposible reproducir canción. Saltando...")
+        print("❌ Todo falló. Saltando canción...")
         state.song_counter += 1
         await asyncio.sleep(5)
         await play_next(ctx_or_vc)
