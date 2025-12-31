@@ -73,9 +73,18 @@ class RadioState:
 
     def get_next_song(self):
         if self.queue:
-            return self.queue.pop(0)
+            state.active_vote = False # Reset vote if we are playing from queue
+            self.last_played = self.queue.pop(0)
+            return self.last_played
+            
         if self.permanent_playlist:
-            return random.choice(self.permanent_playlist)
+            choices = self.permanent_playlist
+            # Avoid repeating last song if possible
+            if len(choices) > 1 and hasattr(self, 'last_played') and self.last_played in choices:
+                 choices = [c for c in choices if c != self.last_played]
+            
+            self.last_played = random.choice(choices)
+            return self.last_played
         return None
 
 state = RadioState()
@@ -209,10 +218,43 @@ async def cmd_delete(ctx, *, query: str):
 
 @bot.command(name="skip")
 async def cmd_skip(ctx):
-    if ctx.author.name != ADMIN_USER: return await ctx.send("⛔ Zugriff verweigert.")
-    if state.voice_client and state.voice_client.is_playing():
-        state.voice_client.stop()
-        await ctx.send("⏭️ Übersprungen.")
+    if state.active_vote: return await ctx.send("⚠️ Abstimmung läuft bereits.")
+    
+    vc = state.voice_client
+    if not vc or not vc.is_playing() or not ctx.author.voice or ctx.author.voice.channel != vc.channel:
+        return await ctx.send("⚠️ Fehler: Bot spielt nicht oder falscher Kanal.")
+
+    # Admin Force Skip
+    if ctx.author.name == ADMIN_USER:
+        vc.stop()
+        return await ctx.send("⏭️ (Admin) Übersprungen.")
+
+    # User Vote Skip
+    members = [m for m in vc.channel.members if not m.bot]
+    required_votes = math.ceil(len(members) / 2)
+    
+    if len(members) < 2:
+        vc.stop()
+        return await ctx.send("⏭️ Übersprungen.")
+
+    state.active_vote = True
+    msg = await ctx.send(f"🗳️ Skip Vote! Benötigt: **{required_votes}**\nReagiere mit ⏭️ (60s).")
+    await msg.add_reaction("⏭️")
+
+    try:
+        await asyncio.sleep(60)
+        cache_msg = await ctx.channel.fetch_message(msg.id)
+        reaction = discord.utils.get(cache_msg.reactions, emoji="⏭️")
+        count = reaction.count - 1 if reaction else 0
+        state.active_vote = False
+        
+        if count >= required_votes:
+            vc.stop()
+            await ctx.send(f"✅ Skip erfolgreich ({count}/{required_votes}).")
+        else:
+            await ctx.send(f"❌ Skip gescheitert ({count}/{required_votes}).")
+    except:
+        state.active_vote = False
 
 @bot.command(name="coment")
 async def cmd_coment(ctx):
