@@ -24,14 +24,19 @@ CITIES = ["Berlin", "Wiesbaden", "Munchen", "Hamburg", "Palma de Mallorca"]
 NEWS_FEED = "https://www.rbb24.de/aktuell/index.xml/feed=rss.xml"
 DEUTSCHLAND_FILE = "deutschland.m4a"
 
-# Configuración YTDL
+# Configuración YTDL (Modo Android para evitar bloqueos 429)
 YTDL_OPTS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
     'quiet': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    'force_ipv4': True,
+    'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, # Camuflarse como móvil
+    'nocheckcertificate': True,
+    'ignoreerrors': True,
+    'logtostderr': False,
+    'no_warnings': True,
 }
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
