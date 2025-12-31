@@ -370,9 +370,15 @@ async def cmd_deutschland(ctx):
 @bot.command(name="join")
 async def cmd_join(ctx):
     if ctx.author.voice:
-        state.voice_client = await ctx.author.voice.channel.connect()
-        await ctx.send(f"📻 Verbunden mit **{ctx.author.voice.channel.name}**")
-        await play_next(ctx)
+        try:
+            # Aumentamos timeout a 60s y forzamos reconexión para entornos lentos (Render)
+            state.voice_client = await ctx.author.voice.channel.connect(timeout=60, reconnect=True)
+            await ctx.send(f"📻 Verbunden mit **{ctx.author.voice.channel.name}**")
+            await play_next(ctx)
+        except asyncio.TimeoutError:
+            await ctx.send("❌ Error: Tiempo de espera agotado al conectar. Discord está lento o bloqueando la conexión UDP.")
+        except Exception as e:
+            await ctx.send(f"❌ Error al conectar: {e}")
     else:
         await ctx.send("⚠️ Du musst erst einem Sprachkanal beitreten.")
 
