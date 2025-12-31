@@ -1,0 +1,9 @@
+discord.py
+yt-dlp
+ffmpeg-python
+APScheduler
+feedparser
+edge-tts
+python-dotenv
+flask
+aiohttp
