@@ -126,59 +126,69 @@ async def generate_tts(text, filename="tts_temp.mp3"):
     await communicate.save(filename)
     return filename
 
-# ---------------- PIPED FALLBACK ----------------
+# ---------------- STREAM EXTRACTORS ----------------
+async def get_stream_from_cobalt(url):
+    api_url = "https://api.cobalt.tools/api/json"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "url": url,
+        "isAudioOnly": True,
+        "aFormat": "mp3" # Convert to safe format
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            print(f"🔄 Cobalt API: {url}")
+            async with session.post(api_url, json=payload, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if "url" in data:
+                        return data["url"]
+        except Exception as e:
+            print(f"Cobalt error: {e}")
+    return None
+
 async def get_stream_from_piped(video_id):
-    # Public Piped instances
     instances = [
         "https://pipedapi.kavin.rocks",
-        "https://api.piped.privacy.com.de",
-        "https://pipedapi.leptons.xyz"
+        "https://pipedapi.leptons.xyz",
+        "https://api.piped.privacy.com.de"
     ]
-    
     async with aiohttp.ClientSession() as session:
         for base_url in instances:
             try:
-                print(f"🔄 Intentando bypass con Piped: {base_url}")
+                print(f"🔄 Piped API: {base_url}")
                 url = f"{base_url}/streams/{video_id}"
                 async with session.get(url, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # Buscar audio stream (m4a preferible)
                         audio_streams = data.get("audioStreams", [])
                         if not audio_streams: continue
-                        
-                        # Sort by bitrate desc
                         best_audio = sorted(audio_streams, key=lambda x: x.get("bitrate", 0), reverse=True)[0]
                         return best_audio["url"]
-            except Exception as e:
-                print(f"Piped error ({base_url}): {e}")
-                continue
+            except: continue
     return None
 
 def extract_video_id(url):
-    # Simple extraction for youtube URLs
-    if "v=" in url:
-        return url.split("v=")[1].split("&")[0]
-    elif "youtu.be/" in url:
-        return url.split("youtu.be/")[1].split("?")[0]
+    if "v=" in url: return url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in url: return url.split("youtu.be/")[1].split("?")[0]
     return None
 
 # ---------------- PLAYBACK LOGIC ----------------
 async def play_next(ctx_or_vc):
     vc = state.voice_client
-    if not vc or not vc.is_connected():
-        return
-    
-    # Priority TTS
+    if not vc or not vc.is_connected(): return
+
     if state.next_tts_message:
-        text = state.next_tts_message
-        state.next_tts_message = None
+        text, state.next_tts_message = state.next_tts_message, None
         print(f"📣 TTS: {text}")
         tts_file = await generate_tts(text)
         vc.play(discord.FFmpegPCMAudio(tts_file), after=lambda e: bot.loop.create_task(play_next(ctx_or_vc)))
         return
 
-    # Info Block
     if state.song_counter > 0 and state.song_counter % 7 == 0:
         state.song_counter += 1
         weather = await get_weather_text()
@@ -195,11 +205,24 @@ async def play_next(ctx_or_vc):
         await play_next(ctx_or_vc)
         return
 
-    try:
-        # Intento 1: YT-DLP Force IPv4
-        stream_url = None
-        title = "Radio Alemania"
-        
+    print(f"🔍 Procesando: {song_url}")
+    stream_url = None
+    title = "Radio Stream"
+
+    # STRATEGY 1: COBALT API (High Success, No IP Block)
+    if "youtube.com" in song_url or "youtu.be" in song_url:
+        stream_url = await get_stream_from_cobalt(song_url)
+        if stream_url: title = "Radio Play (Cobalt)"
+
+    # STRATEGY 2: PIPED API (Fallback)
+    if not stream_url and ("youtube.com" in song_url or "youtu.be" in song_url):
+        vid = extract_video_id(song_url)
+        if vid:
+            stream_url = await get_stream_from_piped(vid)
+            if stream_url: title = "Radio Play (Piped)"
+
+    # STRATEGY 3: LOCAL YTDL (Fallback for Search/Other sites)
+    if not stream_url:
         try:
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(song_url, download=False))
@@ -207,26 +230,16 @@ async def play_next(ctx_or_vc):
             stream_url = data['url']
             title = data.get('title', 'Unknown')
         except Exception as e:
-            print(f"⚠️ YT-DLP falló (Probable 429). Intentando fallback Piped...")
-            video_id = extract_video_id(song_url)
-            if video_id:
-                stream_url = await get_stream_from_piped(video_id)
-                if stream_url:
-                    print(f"✅ Bypass exitoso vía Piped API")
-                else:
-                    raise Exception("Todos los métodos fallaron")
-            else:
-                raise e
+            print(f"❌ YTDL también falló: {e}")
 
-        print(f"▶️ Spielt: {title}")
+    if stream_url:
+        print(f"▶️ Reproduciendo: {title}")
         state.song_counter += 1
-        
         source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTS)
         vc.play(source, after=lambda e: bot.loop.create_task(play_next(ctx_or_vc)))
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=title))
-
-    except Exception as e:
-        print(f"❌ Error fatal reproduciendo: {e}")
+    else:
+        print("❌ Imposible reproducir canción. Saltando...")
         state.song_counter += 1
         await asyncio.sleep(5)
         await play_next(ctx_or_vc)
