@@ -24,20 +24,95 @@ CITIES = ["Berlin", "Wiesbaden", "Munchen", "Hamburg", "Palma de Mallorca"]
 NEWS_FEED = "https://www.rbb24.de/aktuell/index.xml/feed=rss.xml"
 DEUTSCHLAND_FILE = "deutschland.m4a"
 
-# Configuración YTDL (Modo Android para evitar bloqueos 429)
+# ---------------- COOKIES SETUP (ENV VAR) ----------------
+# Si existe la variable de entorno COOKIES_CONTENT, creamos el archivo cookies.txt al vuelo.
+# Esto es para mantener el secreto en Render sin subir el archivo.
+cookies_content = os.getenv("COOKIES_CONTENT")
+if cookies_content:
+    with open("cookies.txt", "w") as f:
+        f.write(cookies_content)
+    print("🍪 cookies.txt creado desde variable de entorno.")
+
+# Configuración YTDL (Modo Android + Cookies)
 YTDL_OPTS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
     'quiet': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
+    'cookiefile': 'cookies.txt', # <--- IMPORTANTE: Carga el archivo cookies.txt
     'force_ipv4': True,
-    'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, # Camuflarse como móvil
+    'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, 
     'nocheckcertificate': True,
     'ignoreerrors': True,
     'logtostderr': False,
     'no_warnings': True,
 }
+
+# (Omitted Middle Sections - Keeping API helpers as they are useful fallbacks if cookies fail or for speed)
+
+# ---------------- PLAYBACK LOGIC ----------------
+async def play_next(ctx_or_vc):
+    vc = state.voice_client
+    if not vc or not vc.is_connected(): return
+
+    if state.next_tts_message:
+        text, state.next_tts_message = state.next_tts_message, None
+        tts_file = await generate_tts(text)
+        vc.play(discord.FFmpegPCMAudio(tts_file), after=lambda e: bot.loop.create_task(play_next(ctx_or_vc)))
+        return
+
+    if state.song_counter > 0 and state.song_counter % 7 == 0:
+        state.song_counter += 1
+        weather = await get_weather_text()
+        news = await get_berlin_news()
+        full_text = f"Das Wetter. {weather}. Und nun die Nachrichten. {news}. Weiter geht es mit Musik."
+        state.next_tts_message = full_text
+        await play_next(ctx_or_vc)
+        return
+
+    song_url = state.get_next_song()
+    if not song_url:
+        await asyncio.sleep(10); await play_next(ctx_or_vc); return
+
+    print(f"🔍 Procesando: {song_url}")
+    stream_url = None
+    title = "Radio Stream"
+
+    # STRATEGY 1: COBALT (Prioridad por rapidez)
+    if not stream_url and ("youtube.com" in song_url or "youtu.be" in song_url):
+        stream_url = await get_stream_from_cobalt(song_url)
+        if stream_url: title = "Radio Play (Cobalt)"
+
+    # STRATEGY 2: LOCAL YTDL + COOKIES (La más fiable con login)
+    if not stream_url:
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(song_url, download=False))
+            if 'entries' in data: data = data['entries'][0]
+            stream_url = data['url']; title = data.get('title', 'Unknown')
+        except Exception as e:
+            print(f"❌ YTDL (Cookies) falló: {e}")
+
+    # STRATEGY 3: FALLBACK APIs (Piped/Invidious)
+    if not stream_url:
+        vid = extract_video_id(song_url)
+        if vid:
+            stream_url = await get_stream_from_piped(vid) or await get_stream_from_invidious(vid)
+            if stream_url: title = "Radio Play (API Fallback)"
+
+    if stream_url:
+        print(f"▶️ Reproduciendo: {title}")
+        state.song_counter += 1
+        SAFE_FFMPEG = {'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5', 'options': '-vn'}
+        source = discord.FFmpegPCMAudio(stream_url, **SAFE_FFMPEG)
+        vc.play(source, after=lambda e: bot.loop.create_task(play_next(ctx_or_vc)))
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=title))
+    else:
+        print("❌ Imposible reproducir canción. Saltando...")
+        state.song_counter += 1
+        await asyncio.sleep(5)
+        await play_next(ctx_or_vc)
 FFMPEG_OPTS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
@@ -126,14 +201,7 @@ async def generate_tts(text, filename="tts_temp.mp3"):
     await communicate.save(filename)
     return filename
 
-# ---------------- PROXY FALLBACK ----------------
-# Lista de proxies gratuitos (HTTP/HTTPS) para intentar "tapar" la IP si todo falla
-PROXIES = [
-    "http://51.158.154.173:3128",
-    "http://20.210.113.32:8123",
-    "http://144.24.137.255:3128",
-    "http://45.74.19.212:15525"
-]
+# ---------------- STREAM EXTRACTORS ----------------
 
 async def get_stream_from_invidious(video_id):
     instances = [
