@@ -126,6 +126,43 @@ async def generate_tts(text, filename="tts_temp.mp3"):
     await communicate.save(filename)
     return filename
 
+# ---------------- PIPED FALLBACK ----------------
+async def get_stream_from_piped(video_id):
+    # Public Piped instances
+    instances = [
+        "https://pipedapi.kavin.rocks",
+        "https://api.piped.privacy.com.de",
+        "https://pipedapi.leptons.xyz"
+    ]
+    
+    async with aiohttp.ClientSession() as session:
+        for base_url in instances:
+            try:
+                print(f"🔄 Intentando bypass con Piped: {base_url}")
+                url = f"{base_url}/streams/{video_id}"
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Buscar audio stream (m4a preferible)
+                        audio_streams = data.get("audioStreams", [])
+                        if not audio_streams: continue
+                        
+                        # Sort by bitrate desc
+                        best_audio = sorted(audio_streams, key=lambda x: x.get("bitrate", 0), reverse=True)[0]
+                        return best_audio["url"]
+            except Exception as e:
+                print(f"Piped error ({base_url}): {e}")
+                continue
+    return None
+
+def extract_video_id(url):
+    # Simple extraction for youtube URLs
+    if "v=" in url:
+        return url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0]
+    return None
+
 # ---------------- PLAYBACK LOGIC ----------------
 async def play_next(ctx_or_vc):
     vc = state.voice_client
@@ -147,7 +184,7 @@ async def play_next(ctx_or_vc):
         weather = await get_weather_text()
         news = await get_berlin_news()
         full_text = f"Das Wetter. {weather}. Und nun die Nachrichten. {news}. Weiter geht es mit Musik."
-        state.next_tts_message = full_text # Loop back to priority
+        state.next_tts_message = full_text
         await play_next(ctx_or_vc)
         return
 
@@ -159,12 +196,28 @@ async def play_next(ctx_or_vc):
         return
 
     try:
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(song_url, download=False))
-        if 'entries' in data: data = data['entries'][0]
-        stream_url = data['url']
-        title = data.get('title', 'Unknown')
+        # Intento 1: YT-DLP Force IPv4
+        stream_url = None
+        title = "Radio Alemania"
         
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(song_url, download=False))
+            if 'entries' in data: data = data['entries'][0]
+            stream_url = data['url']
+            title = data.get('title', 'Unknown')
+        except Exception as e:
+            print(f"⚠️ YT-DLP falló (Probable 429). Intentando fallback Piped...")
+            video_id = extract_video_id(song_url)
+            if video_id:
+                stream_url = await get_stream_from_piped(video_id)
+                if stream_url:
+                    print(f"✅ Bypass exitoso vía Piped API")
+                else:
+                    raise Exception("Todos los métodos fallaron")
+            else:
+                raise e
+
         print(f"▶️ Spielt: {title}")
         state.song_counter += 1
         
@@ -173,10 +226,9 @@ async def play_next(ctx_or_vc):
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=title))
 
     except Exception as e:
-        print(f"❌ Fehler: {e}")
+        print(f"❌ Error fatal reproduciendo: {e}")
         state.song_counter += 1
-        print("⏳ Warte 30s wegen Fehler (Anti-Spam)...")
-        await asyncio.sleep(30)
+        await asyncio.sleep(5)
         await play_next(ctx_or_vc)
 
 # ---------------- COMMANDS (GERMAN) ----------------
