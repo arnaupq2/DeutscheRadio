@@ -24,6 +24,11 @@ CITIES = ["Berlin", "Wiesbaden", "Munchen", "Hamburg", "Palma de Mallorca"]
 NEWS_FEED = "https://www.rbb24.de/aktuell/index.xml/feed=rss.xml"
 DEUTSCHLAND_FILE = "deutschland.m4a"
 
+# Lista de proxies para rotación en caso de fallo (vacío por defecto)
+PROXIES = [
+    # "http://user:pass@1.2.3.4:8080",
+]
+
 # ---------------- COOKIES SETUP (ENV VAR) ----------------
 # Si existe la variable de entorno COOKIES_CONTENT, creamos el archivo cookies.txt al vuelo.
 # Esto es para mantener el secreto en Render sin subir el archivo.
