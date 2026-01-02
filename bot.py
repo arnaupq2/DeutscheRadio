@@ -54,7 +54,7 @@ else:
 YTDL_OPTS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
-    'quiet': True,
+    'quiet': False, # <--- DEBUG: Activado logs
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'cookiefile': os.path.abspath('cookies.txt'), 
@@ -62,8 +62,8 @@ YTDL_OPTS = {
     'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, 
     'nocheckcertificate': True,
     'ignoreerrors': True,
-    'logtostderr': False,
-    'no_warnings': True,
+    'logtostderr': True, # <--- DEBUG: Logs a stderr
+    'no_warnings': False, # <--- DEBUG: Ver warnings
 }
 
 # (Omitted Middle Sections - Keeping API helpers as they are useful fallbacks if cookies fail or for speed)
@@ -335,17 +335,20 @@ async def play_next(ctx_or_vc):
             stream_url = await get_stream_from_piped(vid)
             if stream_url: title = "Radio Play (Piped)"
 
-    # STRATEGY 4: LOCAL YTDL + PROXY ROTATION
+    # STRATEGY 4: LOCAL YTDL + PROXY ROTATION (Fallback principal con cookies)
     if not stream_url:
-        print("⚠️ APIs fallaron. Usando YTDL con Proxies...")
+        print("⚠️ APIs fallaron. Usando YTDL con Cookies...")
         loop = asyncio.get_event_loop()
         
         # Try without proxy first
         try:
+            print(f"🕵️ Intentando extraer info con YTDL para: {song_url}")
             data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YTDL_OPTS).extract_info(song_url, download=False))
             if 'entries' in data: data = data['entries'][0]
             stream_url = data['url']; title = data.get('title', 'Unknown')
-        except:
+            print(f"✅ YTDL Éxito: {title} | URL: {stream_url[:40]}...")
+        except Exception as e:
+            print(f"❌ YTDL Error Crítico: {e}")
             # Try with proxies
             for proxy in PROXIES:
                 print(f"trying proxy: {proxy}")
@@ -389,7 +392,7 @@ async def cmd_join(ctx):
     if ctx.author.voice:
         try:
             # Aumentamos timeout a 60s y forzamos reconexión para entornos lentos (Render)
-            state.voice_client = await ctx.author.voice.channel.connect(timeout=60, reconnect=True)
+            state.voice_client = await ctx.author.voice.channel.connect(timeout=60, reconnect=True, self_deaf=True)
             await ctx.send(f"📻 Verbunden mit **{ctx.author.voice.channel.name}**")
             await play_next(ctx)
         except asyncio.TimeoutError:
