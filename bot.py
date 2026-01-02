@@ -32,6 +32,10 @@ if cookies_content:
     with open("cookies.txt", "w") as f:
         f.write(cookies_content)
     print("🍪 cookies.txt creado desde variable de entorno.")
+elif os.path.exists("cookies.txt"):
+    print("🍪 cookies.txt encontrado en el sistema (Secret File o local).")
+else:
+    print("⚠️ NO SE ENCONTRÓ COOKIES.TXT (Ni variable ni archivo).")
 
 # Configuración YTDL (Modo Android + Cookies)
 YTDL_OPTS = {
