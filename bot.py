@@ -42,6 +42,14 @@ elif os.path.exists("cookies.txt"):
 else:
     print("⚠️ NO SE ENCONTRÓ COOKIES.TXT (Ni variable ni archivo).")
 
+# DEBUG EXTRA: Confirmar ruta y tamaño para Render
+abs_cookie_path = os.path.abspath("cookies.txt")
+if os.path.exists(abs_cookie_path):
+    print(f"📊 DEBUG PATH: {abs_cookie_path}")
+    print(f"📊 DEBUG SIZE: {os.path.getsize(abs_cookie_path)} bytes")
+else:
+    print(f"❌ DEBUG: El archivo NO existe en {abs_cookie_path}")
+
 # Configuración YTDL (Modo Android + Cookies)
 YTDL_OPTS = {
     'format': 'bestaudio/best',
@@ -49,7 +57,7 @@ YTDL_OPTS = {
     'quiet': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    'cookiefile': 'cookies.txt', # <--- IMPORTANTE: Carga el archivo cookies.txt
+    'cookiefile': os.path.abspath('cookies.txt'), 
     'force_ipv4': True,
     'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, 
     'nocheckcertificate': True,
