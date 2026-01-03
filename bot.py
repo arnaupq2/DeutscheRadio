@@ -59,7 +59,7 @@ YTDL_OPTS = {
     'source_address': '0.0.0.0',
     'cookiefile': os.path.abspath('cookies.txt'), 
     'force_ipv4': True,
-    'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, 
+    # 'extractor_args': {'youtube': {'player_client': ['android', 'ios']}}, # REMOVED: Conflict with cookies
     'nocheckcertificate': True,
     'ignoreerrors': True,
     'logtostderr': True, # <--- DEBUG: Logs a stderr
